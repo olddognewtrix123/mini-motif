@@ -1,0 +1,961 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Mini Motif</title>
+  <link href="https://fonts.googleapis.com/css2?family=Berkshire+Swash&display=swap" rel="stylesheet">
+  <style>
+    body { font-family: Arial; text-align: center; }
+    canvas { border: 1px solid black; margin-top: 20px; cursor: pointer; }
+    button, input { margin: 5px; padding: 5px 10px; }
+    .active { background-color: #4CAF50; color: white; }
+    .accidental-buttons { margin: 10px 0; }
+    .accidental-buttons button { font-size: 18px; min-width: 60px; }
+    .note-tooltip {
+      position: absolute;
+      background: rgba(0, 0, 0, 0.8);
+      color: white;
+      padding: 5px 8px;
+      border-radius: 4px;
+      font-size: 12px;
+      pointer-events: none;
+      z-index: 1000;
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <h1 style="font-family: 'Berkshire Swash', cursive; font-size: 3em;">Mini Motif</h1>
+  <canvas id="staffCanvas" width="1000" height="450"></canvas>
+  <div id="tooltip" class="note-tooltip"></div>
+  <br>
+  
+  <div class="accidental-buttons">
+    <label>Accidental: </label>
+    <button onclick="setAccidental('natural')" id="acc-natural" class="active">♮ Natural</button>
+    <button onclick="setAccidental('sharp')" id="acc-sharp">♯ Sharp</button>
+    <button onclick="setAccidental('flat')" id="acc-flat">♭ Flat</button>
+  </div>
+  
+  <div style="margin: 10px;">
+    <label>Note Duration: </label>
+    <button onclick="setDuration(0.25)" id="dur-0.25">1/4 beat</button>
+    <button onclick="setDuration(0.5)" id="dur-0.5">1/2 beat</button>
+    <button onclick="setDuration(1)" id="dur-1" class="active">1 beat</button>
+    <button onclick="setDuration(2)" id="dur-2">2 beats</button>
+    <button onclick="setDuration(3)" id="dur-3">3 beats</button>
+    <button onclick="setDuration(4)" id="dur-4">4 beats</button>
+  </div>
+  <div style="margin: 10px;">
+    <label for="volumeSlider">Volume: </label>
+    <input type="range" id="volumeSlider" min="0" max="100" value="50" 
+           oninput="updateVolume(this.value)" style="width: 200px;">
+    <span id="volumeDisplay">50%</span>
+  </div>
+  <div style="margin: 10px;">
+    <label for="fadeSlider">Final Note Fade: </label>
+    <input type="range" id="fadeSlider" min="0.5" max="8" step="0.5" value="3" 
+           oninput="updateFade(this.value)" style="width: 200px;">
+    <span id="fadeDisplay">3.0s</span>
+  </div>
+  <button onclick="playNotes()">Play</button>
+  <button onclick="exportWav()">Export WAV</button>
+  <button onclick="clearAll()">Clear All</button>
+  <input type="file" accept=".wav" style="display:none" id="downloadAnchor" />
+  
+  <div style="margin-top: 15px; font-size: 12px; color: #666;">
+    <strong>Controls:</strong><br>
+    • Click: Add note | Drag: Move note | Double-click: Change duration<br>
+    • Ctrl+Click: Replace note with current duration | Right-click: Delete note<br>
+    • Select accidental (♯♭♮) before placing notes | Hover over notes to see details<br>
+    • Notes at same horizontal position play as chords<br>
+	Thank you for playing! Mini Motif is brought to you by Sheltocom.
+  </div>
+
+  <script>
+    const notes = [];
+    const maxNotes = 100;
+    const canvas = document.getElementById('staffCanvas');
+    const ctx = canvas.getContext('2d');
+    const tooltip = document.getElementById('tooltip');
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    
+    // Note duration types
+    const noteDurations = [0.25, 0.5, 1, 2, 3, 4];
+    let currentDuration = 1;
+    let currentAccidental = 'natural';
+    let masterVolume = 0.5;
+    let finalNoteFade = 3.0;
+
+    // Combined note mapping for both clefs
+    const noteMap = {
+      // Treble clef notes (upper staff)
+      'C6': 60, 'C#6': 60, 'Db6': 60,
+      'B5': 70, 'B#5': 70, 'Cb6': 70,
+      'A5': 80, 'A#5': 80, 'Bb5': 80,
+      'G5': 90, 'G#5': 90, 'Ab5': 90,
+      'F5': 100, 'F#5': 100, 'Gb5': 100,  // Top treble staff line
+      'E5': 110, 'E#5': 110, 'Fb5': 110,
+      'D5': 120, 'D#5': 120, 'Db5': 120,
+      'C5': 130, 'C#5': 130, 'Cb5': 130,
+      'B4': 140, 'B#4': 140, 'Bb4': 140,  // Middle treble staff line
+      'A4': 150, 'A#4': 150, 'Ab4': 150,
+      'G4': 160, 'G#4': 160, 'Gb4': 160,
+      'F4': 170, 'F#4': 170, 'Fb4': 170,
+      'E4': 180, 'E#4': 180, 'Eb4': 180,  // Bottom treble staff line
+      'D4': 190, 'D#4': 190, 'Db4': 190,
+      'C4': 200, 'C#4': 200, 'Cb4': 200,
+
+      // Bass clef notes (lower staff)
+      'B3': 250, 'B#3': 250, 'Bb3': 250,
+      'A3': 260, 'A#3': 260, 'Ab3': 260,  // Top bass staff line
+      'G3': 270, 'G#3': 270, 'Gb3': 270,
+      'F3': 280, 'F#3': 280, 'Fb3': 280,
+      'E3': 290, 'E#3': 290, 'Eb3': 290,
+      'D3': 300, 'D#3': 300, 'Db3': 300,  // Middle bass staff line
+      'C3': 310, 'C#3': 310, 'Cb3': 310,
+      'B2': 320, 'B#2': 320, 'Bb2': 320,
+      'A2': 330, 'A#2': 330, 'Ab2': 330,  // Bottom bass staff line
+      'G2': 340, 'G#2': 340, 'Gb2': 340,
+      'F2': 350, 'F#2': 350, 'Fb2': 350,
+      'E2': 360, 'E#2': 360, 'Eb2': 360,
+      'D2': 370, 'D#2': 370, 'Db2': 370,
+      'C2': 380, 'C#2': 380, 'Cb2': 380
+    };
+
+    const reverseNoteMap = Object.entries(noteMap).reduce((acc, [k, v]) => { 
+      if (!acc[v]) acc[v] = [];
+      acc[v].push(k);
+      return acc; 
+    }, {});
+
+    function getDurationName(duration) {
+      const durationNames = {
+        0.25: 'Sixteenth',
+        0.5: 'Eighth',
+        1: 'Quarter',
+        2: 'Half',
+        3: 'Dotted Half',
+        4: 'Whole'
+      };
+      return durationNames[duration] || duration.toString();
+    }
+
+    function drawTrebleClef() {
+      ctx.save();
+      ctx.fillStyle = 'black';
+      ctx.font = 'bold 50px serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('𝄞', 80, 130);
+      ctx.restore();
+    }
+
+    function drawBassClef() {
+      ctx.save();
+      ctx.fillStyle = 'black';
+      ctx.font = 'bold 50px serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('𝄢', 80, 285);
+      ctx.restore();
+    }
+
+    function getNoteName(note) {
+      if (note.includes('#')) {
+        return note.replace('#', ' Sharp');
+      } else if (note.includes('b')) {
+        return note.replace('b', ' Flat');
+      }
+      return note;
+    }
+
+    function drawStaff() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.strokeStyle = 'black';
+      ctx.lineWidth = 1;
+      
+      // Draw treble clef staff lines
+      const trebleStaffLines = [100, 120, 140, 160, 180];
+      trebleStaffLines.forEach(y => {
+        ctx.beginPath();
+        ctx.moveTo(50, y);
+        ctx.lineTo(canvas.width - 50, y);
+        ctx.stroke();
+      });
+
+      // Draw bass clef staff lines
+      const bassStaffLines = [260, 280, 300, 320, 340];
+      bassStaffLines.forEach(y => {
+        ctx.beginPath();
+        ctx.moveTo(50, y);
+        ctx.lineTo(canvas.width - 50, y);
+        ctx.stroke();
+      });
+
+      drawTrebleClef();
+      drawBassClef();
+      
+      // Draw ledger lines
+      ctx.strokeStyle = '#666';
+      ctx.lineWidth = 0.5;
+
+      // Treble clef ledger lines
+      [60, 80, 190, 200].forEach(y => {
+        ctx.beginPath();
+        ctx.moveTo(50, y);
+        ctx.lineTo(canvas.width - 50, y);
+        ctx.stroke();
+      });
+
+      // Bass clef ledger lines  
+      [250, 350, 360, 370, 380].forEach(y => {
+        ctx.beginPath();
+        ctx.moveTo(50, y);
+        ctx.lineTo(canvas.width - 50, y);
+        ctx.stroke();
+      });
+      
+      ctx.strokeStyle = 'black';
+      drawNotes();
+    }
+
+    function drawNotes() {
+      ctx.fillStyle = 'black';
+      notes.forEach((n, index) => {
+        const yPos = noteMap[n.note];
+        
+        // Determine clef and stem direction
+        const isBassClef = yPos > 220;
+        const referenceNote = isBassClef ? 'D3' : 'A4';
+        const isAboveRef = getNoteNumber(n.note) > getNoteNumber(referenceNote);
+        
+        const stemX = isAboveRef ? n.x - 8 : n.x + 8;
+        const stemDirection = isAboveRef ? 1 : -1;
+        const stemEnd = yPos + (30 * stemDirection);
+        
+        // Draw note head based on duration
+        if (n.duration >= 4) {
+          ctx.beginPath();
+          ctx.ellipse(n.x, yPos, 10, 6, 0, 0, Math.PI * 2);
+          ctx.stroke();
+        } else if (n.duration >= 2) {
+          ctx.beginPath();
+          ctx.arc(n.x, yPos, 8, 0, Math.PI * 2);
+          ctx.stroke();
+        } else {
+          ctx.beginPath();
+          ctx.arc(n.x, yPos, 8, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        
+        // Draw dotted note (3 beats)
+        if (n.duration === 3) {
+          ctx.beginPath();
+          ctx.arc(n.x + 18, yPos, 2, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        
+        // Draw stem for notes shorter than whole notes
+        if (n.duration < 4) {
+          ctx.beginPath();
+          ctx.moveTo(stemX, yPos);
+          ctx.lineTo(stemX, stemEnd);
+          ctx.stroke();
+          
+          // Draw flags
+          if (n.duration === 0.5) {
+            drawFlag(stemX, stemEnd, isAboveRef, 1);
+          } else if (n.duration === 0.25) {
+            drawFlag(stemX, stemEnd, isAboveRef, 2);
+          }
+        }
+        
+        // Draw accidental symbol
+        ctx.fillStyle = 'black';
+        ctx.font = '16px Arial';
+        ctx.textAlign = 'center';
+        if (n.note.includes('#')) {
+          ctx.fillText('♯', n.x - 20, yPos + 5);
+        } else if (n.note.includes('b')) {
+          ctx.fillText('♭', n.x - 20, yPos + 5);
+        }
+        
+        // Draw note label
+        ctx.fillStyle = '#2196F3';
+        ctx.font = 'bold 11px Arial';
+        ctx.textAlign = 'center';
+        const noteName = getNoteName(n.note);
+        const durationName = getDurationName(n.duration);
+        ctx.fillText(`${noteName}`, n.x, yPos + 40);
+        ctx.fillText(`${durationName}`, n.x, yPos + 52);
+        
+        ctx.fillStyle = 'black';
+      });
+    }
+
+    function drawFlag(stemX, stemEnd, isAboveRef, numFlags) {
+      const flagDirection = isAboveRef ? -1 : 1;
+      const flagWidth = 12;
+      const flagHeight = 8;
+      
+      for (let i = 0; i < numFlags; i++) {
+        const flagY = stemEnd + (i * 6 * (isAboveRef ? 1 : -1));
+        
+        ctx.beginPath();
+        ctx.moveTo(stemX, flagY);
+        ctx.quadraticCurveTo(
+          stemX + (flagWidth * flagDirection), 
+          flagY - (flagHeight / 2 * (isAboveRef ? -1 : 1)),
+          stemX + (flagWidth * flagDirection * 0.7), 
+          flagY + (flagHeight * (isAboveRef ? -1 : 1))
+        );
+        ctx.lineTo(stemX, flagY + (flagHeight * (isAboveRef ? -1 : 1)));
+        ctx.closePath();
+        ctx.fill();
+      }
+    }
+
+    function getNoteNumber(note) {
+      const noteNames = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+      const noteName = note.replace(/[0-9]/g, '').replace('#', '#').replace('b', 'b');
+      const octave = parseInt(note.match(/[0-9]/)[0]);
+      
+      let baseNote = noteName.replace('#', '').replace('b', '');
+      let noteIndex = noteNames.indexOf(baseNote);
+      
+      if (noteName.includes('#')) noteIndex += 0.5;
+      if (noteName.includes('b')) noteIndex -= 0.5;
+      
+      return octave * 12 + noteIndex;
+    }
+
+    function getClickedNoteIndex(x, y) {
+      return notes.findIndex(n => Math.abs(n.x - x) < 15 && Math.abs(noteMap[n.note] - y) < 15);
+    }
+
+    function closestNote(y) {
+      let closest = 'C4';
+      let minDiff = Infinity;
+      
+      for (const [yPos, noteList] of Object.entries(reverseNoteMap)) {
+        const diff = Math.abs(y - parseInt(yPos));
+        if (diff < minDiff) {
+          minDiff = diff;
+          
+          const naturalNote = noteList.find(note => !note.includes('#') && !note.includes('b'));
+          const sharpNote = noteList.find(note => note.includes('#'));
+          const flatNote = noteList.find(note => note.includes('b'));
+          
+          if (currentAccidental === 'sharp' && sharpNote) {
+            closest = sharpNote;
+          } else if (currentAccidental === 'flat' && flatNote) {
+            closest = flatNote;
+          } else if (naturalNote) {
+            closest = naturalNote;
+          } else {
+            closest = noteList[0];
+          }
+        }
+      }
+      return closest;
+    }
+
+    let draggingIndex = -1;
+
+    canvas.addEventListener('mousemove', (e) => {
+      const rect = canvas.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      
+      if (draggingIndex !== -1) {
+        notes[draggingIndex].x = Math.max(50, Math.min(x, canvas.width - 50));
+        notes[draggingIndex].note = closestNote(y);
+        drawStaff();
+      } else {
+        const index = getClickedNoteIndex(x, y);
+        if (index !== -1) {
+          const note = notes[index];
+          const noteName = getNoteName(note.note);
+          const durationName = getDurationName(note.duration);
+          
+          tooltip.textContent = `${noteName} - ${durationName} Note`;
+          tooltip.style.display = 'block';
+          tooltip.style.left = (e.clientX + 10) + 'px';
+          tooltip.style.top = (e.clientY - 30) + 'px';
+        } else {
+          tooltip.style.display = 'none';
+        }
+      }
+    });
+
+    canvas.addEventListener('mouseleave', () => {
+      tooltip.style.display = 'none';
+    });
+
+    canvas.addEventListener('mousedown', (e) => {
+      const rect = canvas.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      const index = getClickedNoteIndex(x, y);
+      
+      if (index !== -1) {
+        draggingIndex = index;
+        tooltip.style.display = 'none';
+      } else if (notes.length < maxNotes && x > 50 && x < canvas.width - 50) {
+        const note = closestNote(y);
+        notes.push({ note, x, duration: currentDuration });
+        drawStaff();
+      }
+    });
+
+    canvas.addEventListener('mouseup', () => {
+      draggingIndex = -1;
+    });
+
+    canvas.addEventListener('dblclick', (e) => {
+      const rect = canvas.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      const index = getClickedNoteIndex(x, y);
+      
+      if (index !== -1) {
+        const currentIndex = noteDurations.indexOf(notes[index].duration);
+        const nextIndex = (currentIndex + 1) % noteDurations.length;
+        notes[index].duration = noteDurations[nextIndex];
+        drawStaff();
+      }
+    });
+
+    canvas.addEventListener('click', (e) => {
+      if (e.button === 1 || e.ctrlKey) {
+        e.preventDefault();
+        const rect = canvas.getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        const y = e.clientY - rect.top;
+        const index = getClickedNoteIndex(x, y);
+        
+        if (index !== -1) {
+          const newNote = closestNote(y);
+          notes[index].note = newNote;
+          notes[index].duration = currentDuration;
+          drawStaff();
+        }
+      }
+    });
+
+    canvas.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      const rect = canvas.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      const index = getClickedNoteIndex(x, y);
+      if (index !== -1) {
+        notes.splice(index, 1);
+        drawStaff();
+      }
+    });
+
+    function freq(note) {
+      const base = {
+        // C2 to B2
+        'C2': 65.41,  'C#2': 69.30,  'Db2': 69.30,  'Cb2': 61.74,
+        'D2': 73.42,  'D#2': 77.78,  'Eb2': 77.78,  
+        'E2': 82.41,  'E#2': 87.31,  'Fb2': 77.78,
+        'F2': 87.31,  'F#2': 92.50,  'Gb2': 92.50,
+        'G2': 98.00,  'G#2': 103.83, 'Ab2': 103.83,
+        'A2': 110.00, 'A#2': 116.54, 'Bb2': 116.54,
+        'B2': 123.47, 'B#2': 130.81, 'Cb3': 123.47,
+
+        // C3 to B3
+        'C3': 130.81, 'C#3': 138.59, 'Db3': 138.59,
+        'D3': 146.83, 'D#3': 155.56, 'Eb3': 155.56,
+        'E3': 164.81, 'E#3': 174.61, 'Fb3': 155.56,
+        'F3': 174.61, 'F#3': 185.00, 'Gb3': 185.00,
+        'G3': 196.00, 'G#3': 207.65, 'Ab3': 207.65,
+        'A3': 220.00, 'A#3': 233.08, 'Bb3': 233.08,
+        'B3': 246.94, 'B#3': 261.63, 'Cb4': 246.94,
+
+        // C4 to B4
+        'C4': 261.63, 'C#4': 277.18, 'Db4': 277.18,
+        'D4': 293.66, 'D#4': 311.13, 'Eb4': 311.13,
+        'E4': 329.63, 'E#4': 349.23, 'Fb4': 329.63,
+        'F4': 349.23, 'F#4': 369.99, 'Gb4': 369.99,
+        'G4': 392.00, 'G#4': 415.30, 'Ab4': 415.30,
+        'A4': 440.00, 'A#4': 466.16, 'Bb4': 466.16,
+        'B4': 493.88, 'B#4': 523.25, 'Cb5': 493.88,
+
+        // C5 to B5
+        'C5': 523.25, 'C#5': 554.37, 'Db5': 554.37,
+        'D5': 587.33, 'D#5': 622.25, 'Eb5': 622.25,
+        'E5': 659.25, 'E#5': 698.46, 'Fb5': 659.25,
+        'F5': 698.46, 'F#5': 739.99, 'Gb5': 739.99,
+        'G5': 783.99, 'G#5': 830.61, 'Ab5': 830.61,
+        'A5': 880.00, 'A#5': 932.33, 'Bb5': 932.33,
+        'B5': 987.77, 'B#5': 1046.50, 'Cb6': 987.77,
+
+        // C6
+        'C6': 1046.50, 'C#6': 1108.73, 'Db6': 1108.73
+      };
+      return base[note] || 440;
+    }
+
+    function setAccidental(accidental) {
+      currentAccidental = accidental;
+      document.querySelectorAll('[id^="acc-"]').forEach(btn => btn.classList.remove('active'));
+      document.getElementById(`acc-${accidental}`).classList.add('active');
+    }
+
+    function setDuration(duration) {
+      currentDuration = duration;
+      document.querySelectorAll('[id^="dur-"]').forEach(btn => btn.classList.remove('active'));
+      document.getElementById(`dur-${duration}`).classList.add('active');
+    }
+
+    function updateVolume(value) {
+      masterVolume = value / 100;
+      document.getElementById('volumeDisplay').textContent = value + '%';
+    }
+
+    function updateFade(value) {
+      finalNoteFade = parseFloat(value);
+      document.getElementById('fadeDisplay').textContent = value + 's';
+    }
+
+    function createViolinSound(frequency, startTime, duration, isLastNote = false) {
+      const fundamental = audioCtx.createOscillator();
+      const harmonic2 = audioCtx.createOscillator();
+      const harmonic3 = audioCtx.createOscillator();
+      const harmonic4 = audioCtx.createOscillator();
+      
+      fundamental.type = 'triangle';
+      harmonic2.type = 'sine';
+      harmonic3.type = 'sine';
+      harmonic4.type = 'sine';
+      
+      fundamental.frequency.value = frequency;
+      harmonic2.frequency.value = frequency * 2;
+      harmonic3.frequency.value = frequency * 3;
+      harmonic4.frequency.value = frequency * 4;
+      
+      const mainGain = audioCtx.createGain();
+      const harm2Gain = audioCtx.createGain();
+      const harm3Gain = audioCtx.createGain();
+      const harm4Gain = audioCtx.createGain();
+      
+      const filter = audioCtx.createBiquadFilter();
+      filter.type = 'lowpass';
+      filter.frequency.value = frequency * 4;
+      filter.Q.value = 0.7;
+      
+      const filter2 = audioCtx.createBiquadFilter();
+      filter2.type = 'lowpass';
+      filter2.frequency.value = frequency * 6;
+      filter2.Q.value = 0.5;
+      
+      const delay = audioCtx.createDelay();
+      const delayGain = audioCtx.createGain();
+      delay.delayTime.value = 0.05;
+      delayGain.gain.value = 0.15;
+      
+      fundamental.connect(mainGain);
+      harmonic2.connect(harm2Gain);
+      harmonic3.connect(harm3Gain);
+      harmonic4.connect(harm4Gain);
+      
+      mainGain.gain.value = 0.25 * masterVolume;
+      harm2Gain.gain.value = 0.12 * masterVolume;
+      harm3Gain.gain.value = 0.06 * masterVolume;
+      harm4Gain.gain.value = 0.02 * masterVolume;
+      
+      const mixer = audioCtx.createGain();
+      mainGain.connect(mixer);
+      harm2Gain.connect(mixer);
+      harm3Gain.connect(mixer);
+      harm4Gain.connect(mixer);
+      
+      mixer.connect(filter);
+      filter.connect(filter2);
+      filter2.connect(audioCtx.destination);
+      
+      filter2.connect(delay);
+      delay.connect(delayGain);
+      delayGain.connect(audioCtx.destination);
+      
+      const masterGain = audioCtx.createGain();
+      filter2.disconnect(audioCtx.destination);
+      filter2.connect(masterGain);
+      masterGain.connect(audioCtx.destination);
+      
+      const attackTime = 0.15;
+      const decayTime = 0.3;
+      const sustainLevel = 0.12 * masterVolume;
+      
+      let releaseTime, extraFadeTime;
+      if (isLastNote) {
+        releaseTime = Math.max(finalNoteFade, duration * 1.2);
+        extraFadeTime = finalNoteFade * 0.8;
+      } else {
+        releaseTime = Math.max(0.6, duration * 0.4);
+        extraFadeTime = 0.3;
+      }
+      
+      masterGain.gain.setValueAtTime(0, startTime);
+      masterGain.gain.linearRampToValueAtTime(0.15 * masterVolume, startTime + attackTime);
+      masterGain.gain.exponentialRampToValueAtTime(sustainLevel, startTime + attackTime + decayTime);
+      
+      const releaseStartTime = Math.max(startTime, startTime + duration - releaseTime);
+      masterGain.gain.setValueAtTime(sustainLevel, releaseStartTime);
+      
+      const finalTime = startTime + duration + extraFadeTime;
+      
+      if (isLastNote) {
+        const midReleaseTime = releaseStartTime + (releaseTime * 0.3);
+        const lateReleaseTime = releaseStartTime + (releaseTime * 0.7);
+        
+        masterGain.gain.exponentialRampToValueAtTime(sustainLevel * 0.3, midReleaseTime);
+        masterGain.gain.exponentialRampToValueAtTime(sustainLevel * 0.05, lateReleaseTime);
+        masterGain.gain.exponentialRampToValueAtTime(0.00001, finalTime);
+      } else {
+        masterGain.gain.exponentialRampToValueAtTime(0.0001, finalTime);
+      }
+      
+      if (duration > 0.5) {
+        const vibrato = audioCtx.createOscillator();
+        const vibratoGain = audioCtx.createGain();
+        vibrato.type = 'sine';
+        vibrato.frequency.value = 4.5;
+        vibratoGain.gain.value = frequency * 0.015;
+        
+        vibrato.connect(vibratoGain);
+        vibratoGain.connect(fundamental.frequency);
+        vibratoGain.connect(harmonic2.frequency);
+        
+        vibrato.start(startTime + 0.4);
+        vibrato.stop(finalTime);
+      }
+      
+      fundamental.start(startTime);
+      harmonic2.start(startTime);
+      harmonic3.start(startTime);
+      harmonic4.start(startTime);
+      
+      fundamental.stop(finalTime);
+      harmonic2.stop(finalTime);
+      harmonic3.stop(finalTime);
+      harmonic4.stop(finalTime);
+    }
+
+    function groupNotesByPosition(notes) {
+      // Group notes that are within 15 pixels horizontally (chord tolerance)
+      const groups = [];
+      const sortedNotes = [...notes].sort((a, b) => a.x - b.x);
+      
+      let currentGroup = [];
+      let currentX = -1000;
+      
+      sortedNotes.forEach(note => {
+        if (Math.abs(note.x - currentX) <= 15) {
+          // This note is close enough to be part of the current chord
+          currentGroup.push(note);
+        } else {
+          // Start a new group
+          if (currentGroup.length > 0) {
+            groups.push([...currentGroup]);
+          }
+          currentGroup = [note];
+          currentX = note.x;
+        }
+      });
+      
+      // Don't forget the last group
+      if (currentGroup.length > 0) {
+        groups.push(currentGroup);
+      }
+      
+      return groups;
+    }
+
+    function playNotes() {
+      if (audioCtx.state === 'suspended') {
+        audioCtx.resume();
+      }
+      
+      const noteGroups = groupNotesByPosition(notes);
+      let currentTime = audioCtx.currentTime + 0.1;
+      
+      noteGroups.forEach((group, groupIndex) => {
+        // Find the longest duration in this chord group
+        const maxDuration = Math.max(...group.map(n => n.duration));
+        const noteDuration = maxDuration * 0.6; // 100 BPM
+        const isLastGroup = groupIndex === noteGroups.length - 1;
+        
+        // Play all notes in the group simultaneously (chord)
+        group.forEach((note, noteIndex) => {
+          const isLastNoteInLastGroup = isLastGroup && noteIndex === group.length - 1;
+          createViolinSound(freq(note.note), currentTime, noteDuration, isLastNoteInLastGroup);
+        });
+        
+        // Move to next chord start time
+        currentTime += noteDuration;
+      });
+    }
+
+    async function exportWav() {
+      if (notes.length === 0) {
+        alert("Please add some notes before exporting!");
+        return;
+      }
+
+      const exportButton = document.querySelector('button[onclick="exportWav()"]');
+      exportButton.textContent = 'Exporting...';
+      exportButton.disabled = true;
+
+      try {
+        // Group notes by position for chord support
+        const noteGroups = groupNotesByPosition(notes);
+
+        // Calculate total duration including final fade
+        let totalDuration = 0;
+        noteGroups.forEach((group, i) => {
+          const maxDuration = Math.max(...group.map(n => n.duration));
+          const noteDuration = maxDuration * 0.6;
+          totalDuration += noteDuration;
+        });
+        // Add extra time for final note fade
+        totalDuration += finalNoteFade * 0.8;
+
+        const sampleRate = 44100;
+        const offlineCtx = new OfflineAudioContext(1, totalDuration * sampleRate, sampleRate);
+
+        // Render all note groups (chords) in the offline context
+        let currentTime = 0.1;
+        noteGroups.forEach((group, groupIndex) => {
+          const maxDuration = Math.max(...group.map(n => n.duration));
+          const noteDuration = maxDuration * 0.6;
+          const isLastGroup = groupIndex === noteGroups.length - 1;
+
+          // Play all notes in the group simultaneously (chord)
+          group.forEach((note, noteIndex) => {
+            const isLastNoteInLastGroup = isLastGroup && noteIndex === group.length - 1;
+            createViolinSoundOffline(offlineCtx, freq(note.note), currentTime, noteDuration, isLastNoteInLastGroup);
+          });
+
+          currentTime += noteDuration;
+        });
+
+        // Render the audio
+        const renderedBuffer = await offlineCtx.startRendering();
+
+        // Convert to WAV
+        const wavBlob = audioBufferToWav(renderedBuffer);
+
+        // Download the file
+        const url = URL.createObjectURL(wavBlob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'dual-clef-composition.wav';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+
+        alert("Your tune has been saved as a WAV file for you to play back later. To save your sheet music, be sure to take a screenshot!");
+
+      } catch (error) {
+        console.error('Export error:', error);
+        alert("Export failed. Please try again.");
+      } finally {
+        exportButton.textContent = 'Export WAV';
+        exportButton.disabled = false;
+      }
+    }
+
+    function createViolinSoundOffline(ctx, frequency, startTime, duration, isLastNote = false) {
+      // Create multiple oscillators for harmonic richness
+      const fundamental = ctx.createOscillator();
+      const harmonic2 = ctx.createOscillator();
+      const harmonic3 = ctx.createOscillator();
+      const harmonic4 = ctx.createOscillator();
+
+      // Set up oscillator types and frequencies
+      fundamental.type = 'triangle';
+      harmonic2.type = 'sine';
+      harmonic3.type = 'sine';
+      harmonic4.type = 'sine';
+
+      fundamental.frequency.value = frequency;
+      harmonic2.frequency.value = frequency * 2;
+      harmonic3.frequency.value = frequency * 3;
+      harmonic4.frequency.value = frequency * 4;
+
+      // Create gain nodes for each harmonic
+      const mainGain = ctx.createGain();
+      const harm2Gain = ctx.createGain();
+      const harm3Gain = ctx.createGain();
+      const harm4Gain = ctx.createGain();
+
+      // Create filters
+      const filter = ctx.createBiquadFilter();
+      filter.type = 'lowpass';
+      filter.frequency.value = frequency * 4;
+      filter.Q.value = 0.7;
+
+      const filter2 = ctx.createBiquadFilter();
+      filter2.type = 'lowpass';
+      filter2.frequency.value = frequency * 6;
+      filter2.Q.value = 0.5;
+
+      // Create delay
+      const delay = ctx.createDelay();
+      const delayGain = ctx.createGain();
+      delay.delayTime.value = 0.05;
+      delayGain.gain.value = 0.15;
+
+      // Connect oscillators to gains
+      fundamental.connect(mainGain);
+      harmonic2.connect(harm2Gain);
+      harmonic3.connect(harm3Gain);
+      harmonic4.connect(harm4Gain);
+
+      // Set harmonic levels with volume control
+      mainGain.gain.value = 0.25 * masterVolume;
+      harm2Gain.gain.value = 0.12 * masterVolume;
+      harm3Gain.gain.value = 0.06 * masterVolume;
+      harm4Gain.gain.value = 0.02 * masterVolume;
+
+      // Create mixer
+      const mixer = ctx.createGain();
+      mainGain.connect(mixer);
+      harm2Gain.connect(mixer);
+      harm3Gain.connect(mixer);
+      harm4Gain.connect(mixer);
+
+      // Apply filtering
+      mixer.connect(filter);
+      filter.connect(filter2);
+
+      // Create master gain for envelope
+      const masterGain = ctx.createGain();
+      filter2.connect(masterGain);
+      masterGain.connect(ctx.destination);
+
+      // Delay path
+      filter2.connect(delay);
+      delay.connect(delayGain);
+      delayGain.connect(ctx.destination);
+
+      // Enhanced envelope
+      const attackTime = 0.15;
+      const decayTime = 0.3;
+      const sustainLevel = 0.12 * masterVolume;
+
+      let releaseTime, extraFadeTime;
+      if (isLastNote) {
+        releaseTime = Math.max(finalNoteFade, duration * 1.2);
+        extraFadeTime = finalNoteFade * 0.8;
+      } else {
+        releaseTime = Math.max(0.6, duration * 0.4);
+        extraFadeTime = 0.3;
+      }
+
+      // Envelope
+      masterGain.gain.setValueAtTime(0, startTime);
+      masterGain.gain.linearRampToValueAtTime(0.15 * masterVolume, startTime + attackTime);
+      masterGain.gain.exponentialRampToValueAtTime(sustainLevel, startTime + attackTime + decayTime);
+
+      // Fixed release timing to prevent negative values
+      const releaseStartTime = Math.max(startTime, startTime + duration - releaseTime);
+      masterGain.gain.setValueAtTime(sustainLevel, releaseStartTime);
+
+      const finalTime = startTime + duration + extraFadeTime;
+
+      if (isLastNote) {
+        const midReleaseTime = releaseStartTime + (releaseTime * 0.3);
+        const lateReleaseTime = releaseStartTime + (releaseTime * 0.7);
+
+        masterGain.gain.exponentialRampToValueAtTime(sustainLevel * 0.3, midReleaseTime);
+        masterGain.gain.exponentialRampToValueAtTime(sustainLevel * 0.05, lateReleaseTime);
+        masterGain.gain.exponentialRampToValueAtTime(0.00001, finalTime);
+      } else {
+        masterGain.gain.exponentialRampToValueAtTime(0.0001, finalTime);
+      }
+
+      // Add vibrato for longer notes
+      if (duration > 0.5) {
+        const vibrato = ctx.createOscillator();
+        const vibratoGain = ctx.createGain();
+        vibrato.type = 'sine';
+        vibrato.frequency.value = 4.5;
+        vibratoGain.gain.value = frequency * 0.015;
+
+        vibrato.connect(vibratoGain);
+        vibratoGain.connect(fundamental.frequency);
+        vibratoGain.connect(harmonic2.frequency);
+
+        vibrato.start(startTime + 0.4);
+        vibrato.stop(finalTime);
+      }
+
+      // Start and stop oscillators
+      fundamental.start(startTime);
+      harmonic2.start(startTime);
+      harmonic3.start(startTime);
+      harmonic4.start(startTime);
+
+      fundamental.stop(finalTime);
+      harmonic2.stop(finalTime);
+      harmonic3.stop(finalTime);
+      harmonic4.stop(finalTime);
+    }
+
+    function audioBufferToWav(buffer) {
+      const length = buffer.length;
+      const sampleRate = buffer.sampleRate;
+      const arrayBuffer = new ArrayBuffer(44 + length * 2);
+      const view = new DataView(arrayBuffer);
+
+      // WAV header
+      const writeString = (offset, string) => {
+        for (let i = 0; i < string.length; i++) {
+          view.setUint8(offset + i, string.charCodeAt(i));
+        }
+      };
+
+      writeString(0, 'RIFF');
+      view.setUint32(4, 36 + length * 2, true);
+      writeString(8, 'WAVE');
+      writeString(12, 'fmt ');
+      view.setUint32(16, 16, true);
+      view.setUint16(20, 1, true);
+      view.setUint16(22, 1, true);
+      view.setUint32(24, sampleRate, true);
+      view.setUint32(28, sampleRate * 2, true);
+      view.setUint16(32, 2, true);
+      view.setUint16(34, 16, true);
+      writeString(36, 'data');
+      view.setUint32(40, length * 2, true);
+
+      // Convert audio data
+      const channelData = buffer.getChannelData(0);
+      let offset = 44;
+      for (let i = 0; i < length; i++) {
+        const sample = Math.max(-1, Math.min(1, channelData[i]));
+        view.setInt16(offset, sample * 0x7FFF, true);
+        offset += 2;
+      }
+
+      return new Blob([arrayBuffer], { type: 'audio/wav' });
+    }
+
+    function clearAll() {
+      if (notes.length > 0 && confirm("Clear all notes? To save your work, click Cancel and go take a screenshot!")) {
+        notes.length = 0;
+        drawStaff();
+      }
+    }
+// Software by Sheltocom. You may not copy or reproduce this in any way for any commercial purpose if 
+// you are making money from it in any way and Sheltocom isn't getting their cut. If you are a teacher 
+// or student, then that's OK. 
+    drawStaff();
+  </script>
+</body>
+</html>
